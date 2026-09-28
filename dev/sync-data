@@ -1,0 +1,70 @@
+#!/bin/bash
+set -euo pipefail
+
+# 現在の worktree でダウンロード・生成した data/ をメインリポジトリに移動し、
+# data/ を main の data/ への symlink に置き換える。
+#
+# 想定シナリオ:
+#   - worktree で `dev/train ...` や `dev/runpod pull ...` を実行
+#   - data/ が実ディレクトリとしてローカルに積み上がる
+#   - このスクリプトで main に merge → symlink 化
+#
+# 動作:
+#   1. 現 worktree が git worktree であることを確認
+#   2. main repo の path を git worktree list から取得
+#   3. data/ が既に symlink → 何もしない
+#   4. data/ が実ディレクトリ → rsync で main に merge
+#      (既存ファイルは上書きしない。新規のみ追加)
+#   5. ローカル data/ を削除し main/data への symlink に置換
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Error: git worktree 内で実行してください" >&2
+  exit 1
+fi
+
+CURRENT_ROOT="$(git rev-parse --show-toplevel)"
+MAIN_ROOT="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
+
+if [ "$CURRENT_ROOT" = "$MAIN_ROOT" ]; then
+  echo "現在のディレクトリはメインリポジトリです。sync 不要。"
+  exit 0
+fi
+
+CURRENT_DATA="${CURRENT_ROOT}/data"
+MAIN_DATA="${MAIN_ROOT}/data"
+
+if [ ! -e "$CURRENT_DATA" ]; then
+  echo "data/ が存在しません。main に symlink を作成します。"
+  mkdir -p "$MAIN_DATA"
+  ln -s "$MAIN_DATA" "$CURRENT_DATA"
+  echo "  symlink: $CURRENT_DATA -> $MAIN_DATA"
+  exit 0
+fi
+
+if [ -L "$CURRENT_DATA" ]; then
+  echo "data/ は既に symlink です (${CURRENT_DATA} -> $(readlink "$CURRENT_DATA"))"
+  exit 0
+fi
+
+if [ ! -d "$CURRENT_DATA" ]; then
+  echo "Error: data/ が通常ファイル/不明な種類です: $CURRENT_DATA" >&2
+  exit 1
+fi
+
+echo "data/ を main にマージします:"
+echo "  from: $CURRENT_DATA"
+echo "  to:   $MAIN_DATA"
+
+mkdir -p "$MAIN_DATA"
+
+# rsync: 既存ファイルは上書きしない (--ignore-existing)、統計出力
+rsync -a --ignore-existing --stats "$CURRENT_DATA/" "$MAIN_DATA/"
+
+# 移動元を削除して symlink に置換
+rm -rf "$CURRENT_DATA"
+ln -s "$MAIN_DATA" "$CURRENT_DATA"
+
+echo ""
+echo "完了:"
+echo "  data/ をメインに merge し symlink に置換しました"
+echo "  symlink: $CURRENT_DATA -> $MAIN_DATA"

@@ -1,0 +1,20 @@
+#!/bin/bash
+# RunPod onstart for reinforce GPU training.
+#
+# This file is intentionally small. ``gpu.runpod.runpod.instance.render_onstart``
+# expands the onstart_lib placeholders below into one self-contained script before
+# passing it to RunPod docker_args.
+#
+# Placeholder values substituted after library expansion:
+#   <COMMIT_SHA>, <RUN_ID>, <BRANCH>, <REPO_URL>,
+#   <CASE>, <CASE_FAMILY>, <CASE_SUBDIR>, <TRAIN_MODULE>, <CONFIG_ARG>,
+#   <PREPROCESS_CMD>, <UV_GROUPS>, <RESUME_FROM>, <RUNPOD_MODE>
+
+__ONSTART_LIB_00_PRELUDE__
+__ONSTART_LIB_10_TOOLS__
+__ONSTART_LIB_20_CLEANUP__
+__ONSTART_LIB_30_PERSIST_AND_CLONE__
+__ONSTART_LIB_40_UV_AND_DVC_PULL__
+__ONSTART_LIB_50_PREPROCESS__
+__ONSTART_LIB_60_TRAIN__
+__ONSTART_LIB_70_ARTIFACTS_AND_DVC__

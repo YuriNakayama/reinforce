@@ -1,0 +1,23 @@
+{
+  "skill_name": "experiment-execution",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "ppo/case1 (CartPole) で GAE λ を 0.95 から 0.98 に上げて再学習する実験をやりたい。plan.md を書いてコードを変更し、ローカルで smoke と pytest を回してから runpod で 3 seed 学習を走らせて、結果を result.md にまとめてほしい。",
+      "expected_output": "Skill は 1-2 問以内で「既存 case1 の config 変更 + RunPod フル実行」であることを確認し、main session 内で順に実行: Phase 2 git/branch reality check → Phase 3 で docs/experiment/ppo/<dir>/iterN_plan.md を書く → Phase 4 で baseline を壊さないよう新 config ファイル (結果が記録済みなら ppo/case2) を作り cases.py に登録 → Phase 4.5 で import 確認、dev/train --case ppo/case1 --smoke を実行し run-dir 契約 (config.resolved.yaml / metrics.json / checkpoint_latest / best / eval/seed<K>.json) を確認、dev/test → Phase 5 で push して dev/runpod train <sha> --case <registry key> を起動し run_id と ETA を返して制御を戻す。完了後 Phase 7 で dev/runpod pull → dev/evaluate で baseline と同一の評価 seed による固定 seed 評価 → iterN_result.md (eval return 平均 ± std、seed ごとの値、baseline 比 Δ、wall-clock とハードウェア) を書き、Phase 8 で Iteration log に 1 行追記。学習バッチの return は見出しに使わない。dev/runpod promote は実行しない。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "dqn/case2 として LunarLander に n-step return (n=3) を入れる新しい実験を立ち上げたい。まず plan.md だけ書いてレビューさせてほしい。実装と runpod はまだ動かさないで。",
+      "expected_output": "Skill は scope = plan.md のみ (実装なし、RunPod なし) と認識し RunPod 確認の質問を省略。Phase 1-3 のみ実行: family=dqn / case2 (新 case、baseline = dqn/case1) / topic=n_step を確定、Phase 2 の git + ls reality check、docs/experiment/dqn/<yyyymmdd>_case2_n_step/iter1_plan.md (既存ディレクトリがあれば iterN) を書く。検証方法には dev/train --smoke、dev/test、dev/evaluate、seed 数 3 以上、baseline と同一 env / 評価 seed を明記。日本語で path を報告して停止。dev/test も push も dev/runpod train も実行しない。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "さっき runpod で回した 20260926-153000 の run の結果を docs にまとめてほしい。ppo/case2 の iter4 として記録したい。",
+      "expected_output": "Skill は Phase 1-5 (確認、plan、実装、起動) を飛ばして Phase 7 へ: dev/runpod pull 20260926-153000 で data/output/models/ppo/case2/runs/<run_id>/ に成果物を取得し、best / metrics.json / eval/ の存在を確認、dev/evaluate --case ppo/case2 --run 20260926-153000 で固定 seed 評価。完走 seed が 3 未満なら採否は inconclusive に固定。既存の実験ディレクトリ内に iter4_result.md (Summary / Numbers: eval return 平均 ± std・seed ごと・baseline 比 Δ・wall-clock / Diagnosis / Decision / Artifacts) を書き、Phase 8 で hypotheses.md の Iteration log に 1 行追記。日本語で eval return と採否の推奨を報告。学習バッチの return は引用しない。",
+      "files": []
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+#!/bin/bash
+# Kaggle Kernel (Notebook) GPU training operations.
+#
+# Usage:
+#   dev/kaggle train <commit-sha> [--case caseN] [--accelerator gpu-t4x2|gpu-p100|cpu] [--watch]
+#   dev/kaggle dataset push [--commit-sha SHA] [--label TEXT] [--force-new] [--wheel PATH]
+#   dev/kaggle dataset status [--slug SLUG]
+#   dev/kaggle pull <run_id> [--case caseN]
+#   dev/kaggle promote <run_id> [--case caseN] [--eval-results PATH]
+#   dev/kaggle status <run_id> [--case caseN]
+#   dev/kaggle watch <run_id> [--case caseN] [--poll-interval 60] [--poll-timeout 36000]
+#   dev/kaggle logs <run_id> [--case caseN] [--tail N] [--grep PATTERN]
+#   dev/kaggle ps [--case caseN] [--all]
+#   dev/kaggle cost-report [--month YYYY-MM] [--case caseN]
+#
+# Free GPU quota: T4 x2 or P100, ~30h/week. See .claude/rules/command.md (GPU).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec uv run --directory backend python -m gpu.kaggle "$@"

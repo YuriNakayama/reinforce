@@ -1,0 +1,78 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+#
+# NOTE: removing a leaked secret later requires a history rewrite AND a rotation.
+
+# ---------------------------------------------------------------- common
+.DS_Store
+*.pem
+*.key
+log/
+docs/works
+
+## env files
+.env
+.env.local
+.env.*.local
+
+# ---------------------------------------------------------------- python
+**/__pycache__
+*.pyc
+*.log
+backend/.venv
+backend/.ruff_cache
+backend/.mypy_cache
+backend/.coverage
+backend/.coverage.*
+backend/tests/.pytest_cache
+backend/tests/coverage/
+
+# ---------------------------------------------------------------- kaggle
+.kaggle/
+kaggle.json
+## trained weights and archives are DVC-managed, never committed
+*.tar.gz
+*.pt
+*.pth
+*.eqx
+*.npz
+*.safetensors
+
+# ---------------------------------------------------------------- data
+# Contents are DVC-managed; only stubs / docs land in git.
+# NOTE: directories MUST be re-included (!/data/ and !/data/**/) BEFORE the
+# file negations below — git cannot un-ignore a file inside an ignored dir.
+/data/**
+!/data/
+!/data/**/
+# Re-include stub files only: *.dvc / *.md / .gitkeep / .gitignore
+!/data/**/*.dvc
+!/data/**/*.md
+!/data/**/.gitkeep
+!/data/**/.gitignore
+
+# ---------------------------------------------------------------- DVC
+/.dvc/tmp
+/.dvc/config.local
+/.dvc/cache
+
+# ---------------------------------------------------------------- terraform
+# tfstate contains resource attributes and sometimes secrets; tfvars contains
+# account IDs and bucket names. Neither belongs in a public repo.
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+tfplan.out
+.terraform
+.terraform.lock.hcl
+infra/**/terraform.tfvars
+*.auto.tfvars
+*.auto.tfvars.json
+
+# ---------------------------------------------------------------- claude code
+# Personal, per-machine allowlist. Never committed.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+.claude/skills/*-workspace/
+

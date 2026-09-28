@@ -1,0 +1,246 @@
+#!/bin/bash
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# 設定: ワークツリーの作成先（メインリポジトリのルートからの相対パス）
+# ここを変えるだけで作成先を簡単に変更できる。
+# ---------------------------------------------------------------------------
+WORKTREE_BASE_REL=".claude/worktrees"
+
+# ---------------------------------------------------------------------------
+# 設定: cmux 連携。1 で有効。
+# cmux 内かつ Claude セッション内から実行した場合、ワークツリー作成後に
+# 新しい cmux pane を開き、現在の Claude セッションの履歴を引き継いだ
+# fork セッションを起動する（セッション名 = ブランチ名）。
+# cmux 外 / Claude 外で実行したときは自動でスキップする。
+# ---------------------------------------------------------------------------
+CMUX_FORK_CLAUDE=1
+CMUX_PANE_DIRECTION="right"   # 新 pane の分割方向 (left|right|up|down)
+
+if [ $# -lt 1 ]; then
+  echo "Usage: dev/create-worktree <branch-name>"
+  echo "Example: dev/create-worktree feature/add-login"
+  echo ""
+  echo "ブランチ名のスラッシュをハイフンに変換して"
+  echo "<main-repo>/${WORKTREE_BASE_REL}/<dir-name> にワークツリーを作成します。"
+  echo ""
+  echo "ワークツリー内から実行した場合も、作成先・分岐元はメインリポジトリ基準になります"
+  echo "（ネストせず、メインの ${WORKTREE_BASE_REL} に同階層で作成）。"
+  exit 1
+fi
+
+BRANCH_NAME="$1"
+DIR_NAME=$(echo "$BRANCH_NAME" | tr '/' '-')
+
+# 作成先・分岐元はつねにメインのワークツリーを基準にする。
+# git worktree list の先頭が必ずメインのワークツリー。
+# これにより、ワークツリー内から実行しても worktree がネストせず、
+# メインの ${WORKTREE_BASE_REL} に同階層で作成され、分岐元もメインのブランチになる。
+MAIN_WORKTREE="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+WORKTREE_BASE="${MAIN_WORKTREE}/${WORKTREE_BASE_REL}"
+WORKTREE_PATH="${WORKTREE_BASE}/${DIR_NAME}"
+
+if [ -d "$WORKTREE_PATH" ]; then
+  echo "Error: ワークツリーが既に存在します: $WORKTREE_PATH"
+  exit 1
+fi
+
+mkdir -p "$WORKTREE_BASE"
+
+# ブランチがローカルに存在するかチェック
+if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}"; then
+  echo "既存のローカルブランチを使用: ${BRANCH_NAME}"
+  git worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
+# リモートに存在するかチェック
+elif git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}"; then
+  echo "リモートブランチから作成: origin/${BRANCH_NAME}"
+  git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" "origin/${BRANCH_NAME}"
+else
+  # 新規ブランチはメインのワークツリーの現在ブランチ（HEAD）から分岐する。
+  # ワークツリー内から実行しても、そのワークツリーのブランチではなく
+  # メイン側のブランチを起点にする。
+  MAIN_BRANCH="$(git -C "$MAIN_WORKTREE" symbolic-ref --short HEAD 2>/dev/null || echo "HEAD")"
+  echo "新規ブランチを作成: ${BRANCH_NAME}（分岐元: メインの ${MAIN_BRANCH}）"
+  git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" "$MAIN_BRANCH"
+fi
+
+# ---------------------------------------------------------------------------
+# data/ をメインリポジトリと共有する。
+#
+# このリポジトリは学習チェックポイント・metrics・リプレイを DVC + S3 で管理して
+# おり、run ごとに数百 MB 単位で増える。worktree ごとに
+# 実体を持つと、ディスクを圧迫するうえ DVC cache も分離され `dvc pull` が
+# S3 から再取得してしまう。symlink と cache 共有でこれを避ける。
+# ---------------------------------------------------------------------------
+DATA_DIR="${MAIN_WORKTREE}/data"
+mkdir -p "$DATA_DIR"
+rm -rf "${WORKTREE_PATH}/data"
+ln -s "$DATA_DIR" "${WORKTREE_PATH}/data"
+echo "  data/ を ${DATA_DIR} に symlink しました"
+
+# data/ を symlink に置換すると、追跡済みの data/** stub が git 上すべて
+# 「削除」扱いになる。その中には S3 への唯一のポインタである runs/<run_id>.dvc が
+# 含まれ、`git commit -a` で失われる。skip-worktree でこの worktree でのみ
+# 差分を無視させる（index 自体は変更しないのでメイン側に影響しない）。
+DATA_TRACKED="$(git -C "$WORKTREE_PATH" ls-files -- data)"
+if [ -n "$DATA_TRACKED" ]; then
+  printf '%s\n' "$DATA_TRACKED" \
+    | xargs -I{} git -C "$WORKTREE_PATH" update-index --skip-worktree -- "{}"
+  echo "  data/ の stub $(printf '%s\n' "$DATA_TRACKED" | wc -l | tr -d ' ') 件を skip-worktree にしました"
+fi
+
+# .gitignore の `/data/**` は中身にしか効かず、置き換えた `data` symlink 自体は
+# 未追跡として現れる。共有の .gitignore ではなくこの worktree 固有の
+# info/exclude で除外する。
+WT_INFO_DIR="$(git -C "$WORKTREE_PATH" rev-parse --git-path info)"
+mkdir -p "$WT_INFO_DIR"
+if ! grep -qxF '/data' "${WT_INFO_DIR}/exclude" 2>/dev/null; then
+  printf '/data\n' >>"${WT_INFO_DIR}/exclude"
+fi
+
+# DVC cache もメインと共有する（config.local は gitignore 済み）。
+MAIN_DVC_CACHE="${MAIN_WORKTREE}/.dvc/cache"
+if [ -d "${MAIN_WORKTREE}/.dvc" ]; then
+  mkdir -p "$MAIN_DVC_CACHE" "${WORKTREE_PATH}/.dvc"
+  printf "[cache]\n    dir = %s\n" "$MAIN_DVC_CACHE" \
+    >>"${WORKTREE_PATH}/.dvc/config.local"
+  echo "  DVC cache を ${MAIN_DVC_CACHE} と共有しました"
+fi
+
+# .env ファイルのコピー（メインのワークツリーを基準にコピー元を探す）
+#
+# "." はリポジトリルート。ルート直下の .env は gitignore されていて
+# worktree には来ないため、ここでコピーしないと worktree 側で認証情報が
+# 欠けた状態になる。
+ENV_DIRS=("." "backend" "infra")
+COPIED=()
+
+for dir in "${ENV_DIRS[@]}"; do
+  src_dir="${MAIN_WORKTREE}/${dir}"
+  dst_dir="${WORKTREE_PATH}/${dir}"
+  [ -d "$dst_dir" ] || continue
+
+  for env_file in "${src_dir}"/.env "${src_dir}"/.env.*; do
+    [ -f "$env_file" ] || continue
+    filename="$(basename "$env_file")"
+    # .env.example はスキップ（gitで管理されており worktree に既にある）
+    [ "$filename" = ".env.example" ] && continue
+    cp "$env_file" "${dst_dir}/${filename}"
+    # 表示用ラベル: ルートは "./.env" ではなく ".env" と出す
+    if [ "$dir" = "." ]; then
+      COPIED+=("${filename}")
+    else
+      COPIED+=("${dir}/${filename}")
+    fi
+  done
+done
+
+echo ""
+echo "ワークツリーを作成しました:"
+echo "  パス:     $WORKTREE_PATH"
+echo "  ブランチ: $BRANCH_NAME"
+
+if [ ${#COPIED[@]} -gt 0 ]; then
+  echo "  コピーした .env:"
+  for f in "${COPIED[@]}"; do
+    echo "    - $f"
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# 指定の cwd で `claude --resume <id>` が解決できるセッション履歴ファイルの
+# パスを返す（存在すればパスを出力、存在しなければ何も出力しない）。
+#
+# Claude はセッション履歴を
+#   <config_dir>/projects/<cwd を - 区切りにしたもの>/<id>.jsonl
+# に保存し、`--resume` は *実行時の cwd* から導いたプロジェクトディレクトリ配下
+# だけを探す。worktree へ cd して resume する以上、worktree の cwd に対応する
+# ファイルが存在するかどうかで成否が決まる。
+# ---------------------------------------------------------------------------
+session_history_file() {
+  local cwd="$1" session_id="$2"
+  local config_dir="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
+  # 絶対パスの "/" を "-" に置換（先頭の "/" も "-" になり先頭が "-" で始まる）。
+  local project_slug
+  project_slug="$(printf '%s' "$cwd" | sed 's#/#-#g')"
+  local f="${config_dir}/projects/${project_slug}/${session_id}.jsonl"
+  [ -f "$f" ] && printf '%s' "$f"
+}
+
+# ---------------------------------------------------------------------------
+# cmux 連携: 新しい pane を開き、Claude を起動する。
+# 現在のセッション履歴が worktree の cwd で resume 可能なら履歴ごと fork し、
+# そうでなければ警告を出して履歴なしの初期 claude を起動する（セッション名 =
+# ブランチ名）。必要条件がそろわない場合は静かにスキップ。
+# ---------------------------------------------------------------------------
+fork_claude_in_cmux_pane() {
+  [ "${CMUX_FORK_CLAUDE}" = "1" ] || return 0
+
+  # cmux 内で実行されているか / claude があるか
+  if [ -z "${CMUX_SURFACE_ID:-}" ] || ! command -v cmux >/dev/null 2>&1; then
+    echo "  (cmux 連携スキップ: cmux 外で実行されています)"
+    return 0
+  fi
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "  (cmux 連携スキップ: claude コマンドが見つかりません)"
+    return 0
+  fi
+
+  # 履歴を引き継げるか事前検証する。
+  #   - セッションIDが取れない、または
+  #   - worktree の cwd に対応する履歴ファイルが存在しない
+  # 場合は resume せず、履歴なしの初期 claude を起動する。
+  local can_fork=0
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    if [ -n "$(session_history_file "$WORKTREE_PATH" "$CLAUDE_CODE_SESSION_ID")" ]; then
+      can_fork=1
+    else
+      echo "  警告: セッション履歴が見つからないため fork せず初期状態で起動します。" >&2
+      echo "        session ID: ${CLAUDE_CODE_SESSION_ID}" >&2
+      echo "        探索先 cwd: ${WORKTREE_PATH}" >&2
+      echo "        （現在のセッションは別の作業ディレクトリで開始されている可能性があります）" >&2
+    fi
+  else
+    echo "  警告: 現在の Claude セッションIDが取得できないため初期状態で起動します。" >&2
+  fi
+
+  # 新しい pane を作成し、その surface ref を取得する。
+  # 出力例: "OK surface:6 pane:6 workspace:1"
+  local pane_out surface_ref
+  pane_out="$(cmux new-pane --direction "${CMUX_PANE_DIRECTION}" --focus true 2>&1)" || {
+    echo "  (cmux 連携スキップ: pane の作成に失敗: ${pane_out})"
+    return 0
+  }
+  surface_ref="$(printf '%s\n' "$pane_out" | grep -oE 'surface:[0-9]+' | head -1)"
+  if [ -z "$surface_ref" ]; then
+    echo "  (cmux 連携スキップ: surface ref を取得できません: ${pane_out})"
+    return 0
+  fi
+
+  # 新 pane で: ワークツリーへ cd → claude 起動。
+  #   履歴あり: --resume <id> --fork-session で履歴を引き継ぎつつ新IDで開始
+  #   履歴なし: -n <branch> のみで初期状態から開始
+  local cmd
+  if [ "$can_fork" = "1" ]; then
+    printf -v cmd 'cd %q && claude --resume %q --fork-session -n %q\n' \
+      "$WORKTREE_PATH" "$CLAUDE_CODE_SESSION_ID" "$BRANCH_NAME"
+  else
+    printf -v cmd 'cd %q && claude -n %q\n' \
+      "$WORKTREE_PATH" "$BRANCH_NAME"
+  fi
+  cmux send --surface "$surface_ref" "$cmd" >/dev/null 2>&1 || {
+    echo "  (cmux 連携: コマンド送信に失敗しました)"
+    return 0
+  }
+
+  echo ""
+  if [ "$can_fork" = "1" ]; then
+    echo "  cmux pane (${surface_ref}) で fork セッションを起動しました:"
+    echo "    セッション名: ${BRANCH_NAME}（履歴を引き継ぎ）"
+  else
+    echo "  cmux pane (${surface_ref}) で初期セッションを起動しました:"
+    echo "    セッション名: ${BRANCH_NAME}（履歴なし）"
+  fi
+}
+
+fork_claude_in_cmux_pane

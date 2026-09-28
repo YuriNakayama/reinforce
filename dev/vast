@@ -1,0 +1,12 @@
+#!/bin/bash
+# Vast.ai operations: train / pull / promote / volume / cost-report.
+#
+# Usage:
+#   dev/vast train <commit-sha> [--case case3] [--stage NAME] [--seed N]
+#   dev/vast pull <run_id> [--case case3]
+#   dev/vast promote <run_id> [--case case3] [--eval-results PATH]
+#   dev/vast volume {list|search|create} [...]
+#   dev/vast cost-report [--month YYYY-MM]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec uv run --directory backend python -m gpu.vast "$@"

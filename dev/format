@@ -1,0 +1,5 @@
+#!/bin/bash
+# Format Python sources with ruff (writes).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec uv run --directory backend ruff format .

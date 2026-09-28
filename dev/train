@@ -1,0 +1,25 @@
+#!/bin/bash
+# Run a pipeline case's train.py locally.
+#
+#   dev/train --case ppo/case1                 # full run per config.yaml
+#   dev/train --case ppo/case1 --smoke         # 1 update on CPU; verifies the run-dir contract
+#   dev/train --case ppo/case1 --config PATH   # alternative config
+#
+# Extra args pass through to train.py.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+CASE=""
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --case) CASE="$2"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+if [[ -z "$CASE" ]]; then
+  echo "Usage: dev/train --case <family>/<caseN> [--smoke] [--config PATH] [args...]" >&2
+  exit 1
+fi
+MODULE="pipeline.${CASE//\//.}.train"
+exec uv run --directory backend python -m "$MODULE" "${ARGS[@]+"${ARGS[@]}"}"

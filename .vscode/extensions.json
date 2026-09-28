@@ -1,0 +1,32 @@
+{
+    "recommendations": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.mypy-type-checker",
+        "ms-python.debugpy",
+        "ms-python.vscode-python-envs",
+        "charliermarsh.ruff",
+        "hashicorp.terraform",
+        "ms-azuretools.vscode-docker",
+        "ms-azuretools.vscode-containers",
+        "ms-vscode-remote.remote-containers",
+        "ms-vscode-remote.remote-ssh",
+        "ms-vscode-remote.remote-ssh-edit",
+        "ms-vscode.remote-explorer",
+        "ryanluker.vscode-coverage-gutters",
+        "github.copilot-chat",
+        "github.vscode-github-actions",
+        "github.vscode-pull-request-github",
+        "davidanson.vscode-markdownlint",
+        "bierner.markdown-mermaid",
+        "shd101wyy.markdown-preview-enhanced",
+        "takumii.markdowntable",
+        "yzhang.markdown-all-in-one",
+        "donjayamanne.githistory",
+        "mhutchie.git-graph",
+        "gruntfuggly.todo-tree",
+        "tamasfe.even-better-toml",
+        "anthropic.claude-code",
+        "ms-toolsai.jupyter"
+    ]
+}

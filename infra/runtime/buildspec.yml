@@ -1,0 +1,49 @@
+# AWS CodeBuild buildspec for reinforce Vast.ai runtime image.
+# Trigger: `aws codebuild start-build --project-name reinforce-dev-runtime`
+# (Source は S3 zip; build_via_codebuild.sh が upload + start を行う)
+#
+# 環境変数 (terraform で project に注入される):
+#   ECR_URL          private ECR repository URL
+#   PUBLIC_ECR_URI   public ECR Gallery URI (Vast.ai が pull するのはこちら)
+#   DVC_S3_BUCKET    DVC remote S3 bucket name
+version: 0.2
+
+env:
+  variables:
+    DVC_S3_PREFIX: "remote/files/md5"
+
+phases:
+  pre_build:
+    commands:
+      - SHA=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
+      - test -n "$DVC_S3_BUCKET" || { echo "DVC_S3_BUCKET is required" >&2; exit 1; }
+      - echo "private=$ECR_URL public=$PUBLIC_ECR_URI bucket=$DVC_S3_BUCKET sha=$SHA"
+      - aws ecr get-login-password --region "${AWS_REGION:-ap-northeast-1}" \
+          | docker login --username AWS --password-stdin "${ECR_URL%%/*}"
+      - aws ecr-public get-login-password --region us-east-1 \
+          | docker login --username AWS --password-stdin "${PUBLIC_ECR_URI%%/*}"
+
+  build:
+    commands:
+      # CodeBuild task role が ECR + S3 (DVC) read 権限を持つので
+      # BuildKit secret は不要 (Dockerfile 側で required=false にしてある).
+      - >-
+        docker buildx build
+        --platform linux/amd64
+        --file infra/runtime/Dockerfile
+        --build-arg DVC_S3_BUCKET="$DVC_S3_BUCKET"
+        --build-arg DVC_S3_PREFIX="$DVC_S3_PREFIX"
+        --tag "${ECR_URL}:latest"
+        --tag "${ECR_URL}:${SHA}"
+        --tag "${PUBLIC_ECR_URI}:latest"
+        --tag "${PUBLIC_ECR_URI}:${SHA}"
+        --load
+        .
+      - docker push "${ECR_URL}:latest"
+      - docker push "${ECR_URL}:${SHA}"
+      - docker push "${PUBLIC_ECR_URI}:latest"
+      - docker push "${PUBLIC_ECR_URI}:${SHA}"
+
+  post_build:
+    commands:
+      - echo "pushed private=${ECR_URL}:${SHA} public=${PUBLIC_ECR_URI}:${SHA}"

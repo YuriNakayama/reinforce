@@ -1,0 +1,135 @@
+{
+    "permissions": {
+        "allow": [
+            "Bash(ls:*)",
+            "Bash(echo:*)",
+            "Bash(uv:*)",
+            "Bash(gh:*)",
+            "Bash(kaggle:*)",
+            "Bash(terraform fmt:*)",
+            "Bash(terraform validate:*)",
+            "Bash(terraform plan:*)"
+        ],
+        "deny": [
+            "Bash(gh pr merge:*)",
+            "Bash(terraform apply:*)",
+            "Bash(terraform destroy:*)"
+        ]
+    },
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const cmd=i.tool_input?.command||'';if(/(uv run pytest|pytest|dvc (pull|push)|terraform (plan|apply)|python -m (dataset|simulate))/.test(cmd)&&!process.env.TMUX){console.error('[Hook] Consider running in tmux for session persistence');console.error('[Hook] tmux new -s dev  |  tmux attach -t dev')}})\""
+                    }
+                ],
+                "description": "Reminder to use tmux for long-running commands"
+            },
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const cmd=i.tool_input?.command||'';if(/git push/.test(cmd)){console.error('[Hook] Verify no secrets (.env), tfstate/tfvars, credentials, or data/ contents are staged before pushing.')}})\""
+                    }
+                ],
+                "description": "Reminder before git push (secrets / data check)"
+            },
+            {
+                "matcher": "Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const p=i.tool_input?.file_path||'';if(/\\.(md|txt)$/.test(p)&&!/(README|CLAUDE|AGENTS|CONTRIBUTING|SKILL)\\.md$/.test(p)&&!/\\.claude\\//.test(p)&&!/feature-plan-workspace\\//.test(p)&&!/(^|\\/)docs\\//.test(p)){console.error('[Hook] BLOCKED: Unnecessary documentation file creation');console.error('[Hook] File: '+p);process.exit(2)}})\""
+                    }
+                ],
+                "description": "Block creation of random .md files - keeps docs consolidated"
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/hooks/suggest-compact.js"
+                    }
+                ],
+                "description": "Suggest manual compaction at logical intervals"
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const i=JSON.parse(d);const cmd=i.tool_input?.command||'';if(/gh pr create/.test(cmd)){const out=i.tool_response?.output||i.tool_output?.output||'';const m=out.match(/https:\\/\\/github.com\\/[^/]+\\/[^/]+\\/pull\\/\\d+/);if(m){console.error('[Hook] PR created: '+m[0]);const pr=m[0].replace(/.*\\/pull\\/(\\d+)/,'$1');console.error('[Hook] To review: gh pr review '+pr)}}})\""
+                    }
+                ],
+                "description": "Log PR URL and provide review command after PR creation"
+            }
+        ],
+        "PreCompact": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/hooks/pre-compact.js"
+                    }
+                ],
+                "description": "Save state before context compaction"
+            }
+        ],
+        "PostCompact": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/hooks/post-compact-inject-claudemd.js"
+                    }
+                ],
+                "description": "Re-inject CLAUDE.md into model context after compaction"
+            }
+        ],
+        "SessionStart": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/hooks/session-start.js"
+                    }
+                ],
+                "description": "Load previous context on new session"
+            }
+        ],
+        "SessionEnd": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/hooks/session-end.js",
+                        "timeout": 5
+                    }
+                ],
+                "description": "Persist session state on end"
+            },
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/hooks/evaluate-session.js",
+                        "timeout": 5
+                    }
+                ],
+                "description": "Evaluate session for extractable patterns"
+            }
+        ]
+    }
+}

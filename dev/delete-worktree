@@ -1,0 +1,141 @@
+#!/bin/bash
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# 設定: ワークツリーの作成先（メインリポジトリのルートからの相対パス）
+# create-worktree と同じ値にすること。
+# ---------------------------------------------------------------------------
+WORKTREE_BASE_REL=".claude/worktrees"
+
+MAIN_WORKTREE="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+WORKTREE_BASE="${MAIN_WORKTREE}/${WORKTREE_BASE_REL}"
+
+usage() {
+  echo "Usage:"
+  echo "  dev/delete-worktree                 # ワークツリー内で実行 → そのワークツリーを削除"
+  echo "  dev/delete-worktree <branch-name>   # メイン等から名前指定で削除"
+  echo "  dev/delete-worktree --list          # 削除可能なワークツリー一覧"
+  echo ""
+  echo "<branch-name> はブランチ名（feature/x）でも dir 名（feature-x）でも可。"
+  echo "作成先: ${WORKTREE_BASE}/<dir-name>"
+}
+
+# --list / -l: ワークツリー一覧（メイン以外）
+if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then
+  echo "ワークツリー一覧（メインを除く）:"
+  git worktree list | tail -n +2 || true
+  exit 0
+fi
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  usage
+  exit 0
+fi
+
+# 削除対象のワークツリーパスとブランチ名を決定する。
+if [ $# -ge 1 ]; then
+  # 引数あり: ブランチ名 or dir 名で特定する。
+  ARG="$1"
+  DIR_NAME=$(echo "$ARG" | tr '/' '-')
+  TARGET_PATH="${WORKTREE_BASE}/${DIR_NAME}"
+
+  # WORKTREE_BASE 配下に見つからない場合は、git worktree list から
+  # ブランチ名一致でも探す（基準ディレクトリ外に作られた既存ツリー救済）。
+  if [ ! -d "$TARGET_PATH" ]; then
+    MATCH="$(git worktree list --porcelain \
+      | awk -v b="refs/heads/${ARG}" '
+          /^worktree /{p=substr($0,10)}
+          /^branch /{if ($2==b) print p}')"
+    if [ -n "$MATCH" ]; then
+      TARGET_PATH="$MATCH"
+    else
+      echo "Error: ワークツリーが見つかりません: ${ARG}"
+      echo "  探索パス: ${TARGET_PATH}"
+      echo ""
+      echo "現在のワークツリー一覧:"
+      git worktree list | tail -n +2 || true
+      exit 1
+    fi
+  fi
+  TARGET_PATH="$(cd "$TARGET_PATH" && pwd)"
+  BRANCH_NAME="$(git -C "$TARGET_PATH" rev-parse --abbrev-ref HEAD)"
+else
+  # 引数なし: 現在地がワークツリーであることを前提に、その場を削除する。
+  REPO_ROOT="$(git rev-parse --show-toplevel)"
+  if [ "$REPO_ROOT" = "$MAIN_WORKTREE" ]; then
+    echo "Error: メインのワークツリーでは引数なし実行はできません。"
+    echo "削除するブランチ名を指定するか、ワークツリー内で実行してください。"
+    echo ""
+    usage
+    exit 1
+  fi
+  TARGET_PATH="$REPO_ROOT"
+  BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD)"
+fi
+
+# メインのワークツリーは削除対象外。
+if [ "$TARGET_PATH" = "$MAIN_WORKTREE" ]; then
+  echo "Error: メインのワークツリーは削除できません: $TARGET_PATH"
+  exit 1
+fi
+
+echo "以下のワークツリーを削除します:"
+echo "  パス:     $TARGET_PATH"
+echo "  ブランチ: $BRANCH_NAME"
+echo ""
+
+# 未コミットの変更があれば警告（対象ワークツリーに対して確認する）
+if ! git -C "$TARGET_PATH" diff --quiet || ! git -C "$TARGET_PATH" diff --cached --quiet; then
+  echo "Warning: 未コミットの変更があります。"
+  git -C "$TARGET_PATH" status --short
+  echo ""
+fi
+
+# 未プッシュのコミットがあれば警告
+UPSTREAM="origin/${BRANCH_NAME}"
+if git rev-parse --verify --quiet "$UPSTREAM" >/dev/null 2>&1; then
+  UNPUSHED=$(git -C "$TARGET_PATH" log "${UPSTREAM}..HEAD" --oneline 2>/dev/null || true)
+  if [ -n "$UNPUSHED" ]; then
+    echo "Warning: 未プッシュのコミットがあります:"
+    echo "$UNPUSHED"
+    echo ""
+  fi
+fi
+
+read -p "本当に削除しますか？ [y/N]: " confirm
+if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+  echo "キャンセルしました。"
+  exit 0
+fi
+
+# create-worktree が付けた skip-worktree を戻してから削除する。
+# 途中で失敗しても index が中途半端な状態で残らないようにするため。
+DATA_TRACKED="$(git -C "$TARGET_PATH" ls-files -- data 2>/dev/null || true)"
+if [ -n "$DATA_TRACKED" ]; then
+  printf '%s\n' "$DATA_TRACKED" \
+    | xargs -I{} git -C "$TARGET_PATH" update-index --no-skip-worktree -- "{}" \
+      2>/dev/null || true
+fi
+
+# 対象ワークツリー内にいる場合は離脱してから削除する。
+cd "$MAIN_WORKTREE"
+git worktree remove "$TARGET_PATH" --force
+
+echo ""
+echo "ワークツリーを削除しました: $TARGET_PATH"
+
+# ブランチも削除するか確認
+read -p "ブランチ '${BRANCH_NAME}' も削除しますか？ [y/N]: " confirm_branch
+if [[ "$confirm_branch" =~ ^[Yy]$ ]]; then
+  if git branch -d "$BRANCH_NAME" 2>/dev/null; then
+    echo "ブランチを削除しました: $BRANCH_NAME"
+  else
+    echo "Warning: ブランチにマージされていない変更があります。"
+    read -p "強制削除しますか？ [y/N]: " force_confirm
+    if [[ "$force_confirm" =~ ^[Yy]$ ]]; then
+      git branch -D "$BRANCH_NAME"
+      echo "ブランチを強制削除しました: $BRANCH_NAME"
+    else
+      echo "ブランチの削除をスキップしました。"
+    fi
+  fi
+fi

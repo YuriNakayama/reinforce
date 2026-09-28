@@ -1,0 +1,23 @@
+#!/bin/bash
+# Fixed-seed evaluation of a run's best checkpoint.
+#
+#   dev/evaluate --case ppo/case1 --run 20260926-120000
+#
+# Extra args pass through to evaluate.py.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+CASE=""
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --case) CASE="$2"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+if [[ -z "$CASE" ]]; then
+  echo "Usage: dev/evaluate --case <family>/<caseN> --run <run_id> [args...]" >&2
+  exit 1
+fi
+MODULE="pipeline.${CASE//\//.}.evaluate"
+exec uv run --directory backend python -m "$MODULE" "${ARGS[@]+"${ARGS[@]}"}"

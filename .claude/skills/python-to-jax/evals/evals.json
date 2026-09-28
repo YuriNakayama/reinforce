@@ -1,0 +1,26 @@
+{
+  "skill_name": "python-to-jax",
+  "evals": [
+    {
+      "id": 0,
+      "name": "single-file-env",
+      "prompt": "backend/pipeline/ppo/case2/env.py の NumPy 版 CartPole 風環境を JAX に書き換えて。GPU で数万環境を並列に回せるようにしたい。",
+      "expected_output": "Creates env_jax.py beside env.py with a (B, ...) state pytree and a masked, jit-able step (auto-reset via jnp.where), mirrors backend/src/simulate/jaxenv/ structure, and writes a parity pytest under backend/tests/unit/pipeline/ppo/case2/ comparing observations, rewards, and done flags against the NumPy original on identical actions within float32 tolerance. Reports green test output and notes that the GPU speedup is pending a RunPod run if no pod is available.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "rollout-scan-vmap",
+      "prompt": "rollout.py の collect_rollout を jax 化したい。scan と vmap でちゃんと一本のトレースになるようにしてくれる？parity も確認したい。",
+      "expected_output": "Resolves the target rollout file (asks which case if ambiguous), ports the T-step loop to lax.scan over a vmapped env step with PRNGKey threaded through the carry and no per-seed recompilation, and writes a trajectory-parity test that feeds pre-sampled actions to both versions and compares discrete fields exactly and floats within a band.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "gae-function",
+      "prompt": "pipeline/ppo/case1/train.py にある NumPy の compute_gae を JAX に port して。reverse scan で書いて、元の実装と一致することをテストで確認したい。",
+      "expected_output": "Creates a compute_gae_jax using jax.lax.scan(reverse=True) over (T, B) arrays with terminal masking, writes a parity test with random rewards/values/dones (including terminals) asserting atol 1e-4 against the NumPy version, and passes dev/lint.",
+      "files": []
+    }
+  ]
+}

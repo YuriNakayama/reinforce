@@ -1,0 +1,53 @@
+#!/bin/bash
+# DVC operations.
+#
+# Usage:
+#   dev/dvc setup                  # per-machine config (cache dir + AWS profile)
+#   dev/dvc pull [<targets>...]    # fetch real data from the S3 remote
+#   dev/dvc push [<targets>...]    # upload to S3
+#   dev/dvc status --cloud         # is the local cache in sync with the remote?
+#   dev/dvc add <path>             # start tracking a path
+#   dev/dvc <subcommand> [args...] # pass-through
+#
+# NOTE: dvc must run from the REPO ROOT, not backend/ — .dvc/ lives at the root
+# and `uv run --directory backend` would make dvc look in the wrong place.
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
+
+DVC_BIN="$ROOT_DIR/backend/.venv/bin/dvc"
+if [[ ! -x "$DVC_BIN" ]]; then
+    echo "dvc not found at $DVC_BIN — run dev/setup first." >&2
+    exit 1
+fi
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: dev/dvc <subcommand> [args...]" >&2
+    exit 1
+fi
+
+subcommand="$1"
+shift
+
+case "$subcommand" in
+    setup)
+        # Idempotent per-developer setup written to .dvc/config.local, which is
+        # gitignored. Run once per machine.
+        CACHE_DIR="${DVC_CACHE_DIR:-$ROOT_DIR/.dvc/cache}"
+        AWS_PROFILE="${REINFORCE_AWS_PROFILE:-reinforce}"
+
+        mkdir -p "$CACHE_DIR"
+        echo "== DVC: cache dir -> $CACHE_DIR =="
+        "$DVC_BIN" cache dir --local "$CACHE_DIR"
+
+        echo "== DVC: remote 's3' profile -> $AWS_PROFILE =="
+        "$DVC_BIN" remote modify --local s3 profile "$AWS_PROFILE"
+
+        echo
+        echo "Wrote .dvc/config.local (gitignored):"
+        cat .dvc/config.local 2>/dev/null || true
+        ;;
+    *)
+        exec "$DVC_BIN" "$subcommand" "$@"
+        ;;
+esac

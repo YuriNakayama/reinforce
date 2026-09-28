@@ -1,0 +1,13 @@
+#!/bin/bash
+# Lint + type check. Non-zero exit if either fails.
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+EXIT_CODE=0
+
+echo "== ruff =="
+(cd "$ROOT_DIR/backend" && uv run ruff check . --fix) || EXIT_CODE=1
+
+echo "== mypy =="
+(cd "$ROOT_DIR/backend" && uv run mypy --config-file pyproject.toml .) || EXIT_CODE=1
+
+exit $EXIT_CODE

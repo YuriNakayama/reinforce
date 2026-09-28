@@ -1,0 +1,23 @@
+{
+  "skill_name": "experiment-analysis",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "docs/experiment/ppo/20261003_case2_gae_lambda/iter2_result.md の結果、baseline より悪いのはなぜか分析したい。学習曲線のどこで差がついたのかと、seed ごとの違いを整理して analysis にまとめてほしい。",
+      "expected_output": "Skill は対象を docs/experiment/ppo/20261003_case2_gae_lambda/ と解決し hypotheses.md (skip list / baseline / seed 数) と iter2_result.md から run_id と baseline run_id を取得。data/output/models/ppo/case2/runs/<run_id>/ が無ければ dev/runpod pull で取得。summarize_runs.py を絶対パスで --run と --baseline 付きで実行し data/output/experiment/ppo/case2/analysis/<ts>/summary.md を生成 (stdout 1 行のみ、metrics.json は chat に貼らない)。summary.md を読み where_diverged (乖離 step、傾きか到達値か、その時点の loss 項) / what_helped / where_to_focus_next (崩壊 seed や step 区間) の 3 観点で分析し、同じディレクトリに iter2_analysis.md を書く。hypotheses.md の該当仮説の checkbox と Iteration log 行だけ更新 (状態は触らない)。学習バッチの return は引用しない。日本語で報告し /experiment-plan を次の候補として提案。再学習・コード編集はしない。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "dqn/case1 の LunarLander の結果、3 seed 平均で +15 だけど seed 1 だけ大きく伸びてるように見える。本当に採用していいか相談したい。",
+      "expected_output": "Skill は直前 iter の run と baseline で summarize_runs.py を実行し、Fixed-seed evaluation 表の per-seed 値から平均の改善が seed 1 に依存しているかを確認。what_helped で「全 seed で改善」と「1 seed が平均を動かした」を区別し、std と per-seed 差を根拠に verdict を inconclusive 寄りで提示 (学習バッチの return は使わない)。確認計画として 10 seed での再評価 (dev/evaluate / 追加学習) を NEXT ACTION に提示。hypotheses.md の checkbox と Iteration log を verdict に合わせて更新し、状態は変更しない。dev/runpod promote は自動実行しない。日本語で報告。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "さっき runpod で回した 20260926-153000 の結果を分析したい。ppo/case2 の iter6 として記録予定。まだ result.md は書いてない。",
+      "expected_output": "Skill は iter6_result.md が存在しないことを検出し、「result.md の初回作成は experiment-execution の責務です (Phase 7: dev/runpod pull → dev/evaluate → iterN_result.md)。先にそちらで result.md を書いてから、この skill で analysis を追加してください」と日本語で redirect。analysis.md は書かない。",
+      "files": []
+    }
+  ]
+}

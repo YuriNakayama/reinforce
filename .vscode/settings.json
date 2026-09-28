@@ -1,0 +1,60 @@
+{
+    "files.autoSave": "onFocusChange",
+    "files.exclude": {
+        "**/.git": true,
+        "**/.coverage": true,
+        "**/.mypy_cache": true,
+        "**/.pytest_cache": true,
+        "**/.ruff_cache": true,
+        "**/.terraform": true,
+        "**/.terraform.lock.hcl": true,
+        "**/.infracost": true,
+        "**/__pycache__": true
+    },
+    "markdownlint.config": {
+        "MD024": false,
+        "MD053": false
+    },
+    "github.copilot.enable": {
+        "markdown": true
+    },
+    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/backend/src",
+        "${workspaceFolder}/backend"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "python.testing.autoTestDiscoverOnSaveEnabled": true,
+    "python.testing.pytestArgs": [
+        "tests",
+        "--no-cov",
+        "-p",
+        "no:xdist",
+        "-ra"
+    ],
+    "python.testing.cwd": "${workspaceFolder}/backend",
+    "coverage-gutters.showGutterCoverage": true,
+    "coverage-gutters.showLineCoverage": true,
+    "coverage-gutters.showRulerCoverage": true,
+    "python.analysis.diagnosticsSource": "Pylance",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.aiCodeActions": {
+        "implementAbstractClasses": true,
+        "generateSymbol": true,
+        "convertFormatString": true
+    },
+    "github.copilot.chat.commitMessageGeneration.instructions": [
+        {
+            "file": ".github/instructions/commit-message.instructions.md"
+        }
+    ],
+    "github.copilot.chat.pullRequestDescriptionGeneration.instructions": [
+        {
+            "file": ".github/instructions/pull-request-description.instructions.md"
+        }
+    ],
+    "github-actions.workflows.pinned.workflows": [
+        ".github/workflows/ci.yml"
+    ]
+}

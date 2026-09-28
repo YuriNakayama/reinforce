@@ -1,0 +1,23 @@
+{
+  "skill_name": "experiment",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/experiment",
+      "expected_output": "Phase 0 で AskUserQuestion 1 ラウンド 3 問: (1) 対象 hypotheses.md (docs/experiment/*/*/hypotheses.md から最大 5 候補を 'family/caseN/topic (残 X 仮説)' 形式で提示 + Other)、(2) 最大 iteration 数 (1/3/⭐5/10/リスト消化まで/上限なし⚠️/Other)、(3) ループ周期 (loop 60s / loop 5m / schedule */15min / schedule hourly / schedule daily / ⭐逐次 / Other)。'上限なし' 選択時は RunPod GPU コスト累積の警告を 1 行 surface。schedule 選択時は周期 ≥ 想定 tick 所要時間 (seed 数 × 学習 + 固定 seed 評価) を user と擦り合わせる。hypotheses.md が無ければ /experiment-hypothesize へ redirect して終了。Phase 3 の各 tick で experiment-plan (引数なし、Step 0.5 がモード決定) → experiment-execution (dev/train --smoke → dev/test → RunPod → dev/evaluate) → experiment-analysis を 1 巡。broaden が返ったらループ停止。各 tick 完了で 3 行以内の日本語報告 (eval return 平均 ± std / seed 数 / baseline 比 Δ、採否、次 tick 予定)。学習バッチの return は見出しに使わない。停止時は cron / loop 解除 + dev/runpod ps で pod 残存なしを確認 + hypotheses.md の状態を completed/stopped/paused に更新 + 5-10 行の集計レポート (dev/runpod promote は user 個別承認)。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "ppo/case2 の hypotheses.md にある 5 個の仮説を夜中に順番に回しておきたい",
+      "expected_output": "Phase 0 で対象 = docs/experiment/ppo/<dir>/hypotheses.md、max iteration = 5、周期を確認。1 tick が 3 seed の学習 + 固定 seed 評価で数十分〜数時間かかるため、schedule hourly は並列起動の危険があると説明し ⭐逐次 (+ dev/runpod watch で離席運用) を推薦。Phase 1 で状態と pending 数を確認し skip list をキャッシュ。Phase 3 で各 tick が experiment-plan → experiment-execution (RunPod 学習、auto-recover あり) → experiment-analysis (学習曲線分析 + verdict 書き戻し) を 1 巡。朝の時点で Iteration log に各 iter の run_id・eval return・採否が残る。max 到達 or 全消化で Phase 4 (cron / watch 解除、pod 残存なし確認、集計レポート: 最良 iter の eval return 平均 ± std、合計 wall-clock とコスト)。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "今 /experiment で走らせてるループ止めて",
+      "expected_output": "Phase 4 起動: 登録中の schedule cron job (or loop) を解除 (schedule list → 該当 job 特定 → 削除)。dev/runpod watch を起動していればそれも整理し、dev/runpod ps で稼働中 pod が残っていないことを確認 (残っていれば停止してよいか user に確認)。hypotheses.md の状態ヘッダを 'stopped' に書き換え、Iteration log 末尾に停止理由 (user 指示) と停止時刻を 1 行追記。完了済 iter / 残 iter のカウント、採否別サマリ、最良 iter (family/case + run_id + eval return 平均 ± std、seed 数)、各 iter の result.md / analysis.md path、推奨次アクション (採用候補があれば dev/runpod promote の user 確認) を 5-10 行の日本語で報告。残仮説は - [ ] のまま残す。",
+      "files": []
+    }
+  ]
+}

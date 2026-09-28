@@ -1,0 +1,215 @@
+#!/bin/bash
+# Vast.ai onstart for reinforce GPU training.
+# Placeholders are substituted by gpu.vast.instance.render_onstart before upload
+# (values come from the shared case registry gpu/runpod/config/cases.py):
+#   <COMMIT_SHA>, <RUN_ID>, <BRANCH>, <REPO_URL>,
+#   <CASE> (registry key, e.g. ppo_case1_smoke), <CASE_FAMILY> (e.g. ppo),
+#   <CASE_SUBDIR> (e.g. case1), <TRAIN_MODULE> (python -m target),
+#   <CONFIG_ARG> ('' or flags such as '--smoke' / '--config <path>'),
+#   <PREPROCESS_CMD> ('' or 'module.path [--config <path>]'),
+#   <UV_GROUPS> (extra uv dependency groups, e.g. 'nn'; cuda is always added)
+set -euo pipefail
+exec > >(tee -a /var/log/onstart.log) 2>&1
+
+INSTANCE_ID="${VAST_CONTAINERLABEL:-${CONTAINER_ID:-unknown}}"
+
+cleanup_destroy() {
+  local exit_code=$?
+  echo "[onstart] cleanup status=${exit_code}"
+  if [ "${exit_code}" -ne 0 ]; then
+    echo "[onstart] failure: leaving instance up for manual inspection"
+    exit "${exit_code}"
+  fi
+  if [ -z "${VAST_API_KEY:-}" ]; then
+    echo "[onstart] VAST_API_KEY missing; skipping self-destroy"
+    return
+  fi
+  # vastai CLI は backend venv 内 (uv pip install --project backend) なので
+  # PATH には出ない。venv の python から直接 SDK を呼ぶ。
+  if [ -d /workspace/reinforce/backend/.venv ]; then
+    echo "[onstart] self-destroy instance=${INSTANCE_ID} via backend venv"
+    /workspace/reinforce/backend/.venv/bin/python -c "
+from vastai import VastAI
+import os
+sdk = VastAI(api_key=os.environ['VAST_API_KEY'])
+try:
+    instance_id = int(os.environ.get('INSTANCE_ID', '${INSTANCE_ID}'))
+except (ValueError, KeyError):
+    print('invalid INSTANCE_ID env')
+    raise SystemExit
+result = sdk.destroy_instance(id=instance_id)
+print('destroy:', result)
+" || echo "[onstart] self-destroy failed (instance left running)"
+  else
+    echo "[onstart] backend venv missing; skipping self-destroy"
+  fi
+}
+trap cleanup_destroy EXIT
+
+echo "[onstart] step=env_persist"
+env >> /etc/environment
+
+# Persistent volume が /persist にマウントされている場合、uv cache / DVC cache を
+# symlink で永続化する。RL case は学習データを online 生成するので lake/mart は
+# 持たない。volume が無いとき (=未マウント) は通常通りローカルディスクに置く。
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_setup mount=/persist"
+  mkdir -p /persist/uv-cache /persist/dvc-cache
+  mkdir -p "$HOME/.cache"
+  rm -rf "$HOME/.cache/uv" 2>/dev/null || true
+  ln -sfn /persist/uv-cache "$HOME/.cache/uv"
+  export UV_CACHE_DIR="$HOME/.cache/uv"
+  echo "[onstart] persist: uv cache -> /persist/uv-cache"
+else
+  echo "[onstart] persist: /persist not mounted (no volume) — using ephemeral disk"
+fi
+
+echo "[onstart] step=clone repo=<REPO_URL> sha=<COMMIT_SHA>"
+mkdir -p /workspace
+cd /workspace
+if [ ! -d reinforce ]; then
+  if [ -n "${GIT_PAT:-}" ]; then
+    git clone "https://x-access-token:${GIT_PAT}@$(echo "<REPO_URL>" | sed 's|https://||')" reinforce
+  else
+    git clone "<REPO_URL>" reinforce
+  fi
+fi
+cd reinforce
+git fetch origin "<COMMIT_SHA>" || true
+git checkout "<COMMIT_SHA>"
+
+# Repo 内の .dvc/cache を /persist に symlink (冪等).
+if [ -d /persist ]; then
+  echo "[onstart] step=persist_link_repo"
+  mkdir -p .dvc
+  rm -rf .dvc/cache 2>/dev/null || true
+  ln -sfn /persist/dvc-cache .dvc/cache
+fi
+
+echo "[onstart] step=install_uv"
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+export PATH="$HOME/.local/bin:$PATH"
+
+echo "[onstart] step=uv_sync"
+# ECR の焼込み image (/opt/reinforce/backend/.venv) があるなら symlink で
+# venv を流用し、新規 wheel ダウンロードを回避する.
+PREBUILT_VENV="/opt/reinforce/backend/.venv"
+if [ -d "$PREBUILT_VENV" ] && [ ! -e backend/.venv ]; then
+  echo "[onstart] uv_sync: reusing prebuilt venv from $PREBUILT_VENV"
+  ln -sfn "$PREBUILT_VENV" backend/.venv
+fi
+# `cuda` group (JAX CUDA 12 plugin) は常に入れる。<UV_GROUPS> は case registry の
+# `uv_groups` (例: torch を使う case は "nn")。sync は宣言的なので 1 回にまとめる。
+UV_GROUP_ARGS="--group cuda"
+for g in <UV_GROUPS>; do
+  if [ "${g}" != "cuda" ]; then
+    UV_GROUP_ARGS="${UV_GROUP_ARGS} --group ${g}"
+  fi
+done
+# 大型 wheel (nvidia-* 数百 MB) で connection reset が起きやすいため retry。
+# image 焼込み済の場合は実体 download なしで lockfile だけ照合される (~30秒).
+for attempt in 1 2 3; do
+  if uv sync --locked --no-dev ${UV_GROUP_ARGS} --directory backend; then
+    break
+  fi
+  echo "[onstart] uv_sync attempt=${attempt} failed; retrying in 30s"
+  sleep 30
+  if [ "${attempt}" -eq 3 ]; then
+    echo "[onstart] uv_sync exhausted retries"
+    exit 1
+  fi
+done
+
+echo "[onstart] step=install_vastai_cli_for_self_destroy"
+uv pip install --project backend vastai >/dev/null 2>&1 || true
+
+echo "[onstart] step=dvc_cache"
+# Image (/opt/reinforce/.dvc/cache) に焼き込んだ DVC cache を流用するため、
+# clone 先の .dvc/cache を image cache に symlink する.
+PREBUILT_DVC_CACHE="/opt/reinforce/.dvc/cache"
+if [ -d "$PREBUILT_DVC_CACHE" ]; then
+  echo "[onstart] dvc_cache: reusing prebuilt cache from $PREBUILT_DVC_CACHE"
+  mkdir -p .dvc
+  rm -rf .dvc/cache 2>/dev/null || true
+  ln -sfn "$PREBUILT_DVC_CACHE" .dvc/cache
+fi
+
+echo "[onstart] step=mkdir_run"
+# 絶対 path: train.py は cwd=backend/ で REINFORCE_RUN_DIR を解決するため。
+RUN_DIR_REL="data/output/models/<CASE_FAMILY>/<CASE_SUBDIR>/runs/<RUN_ID>"
+RUN_DIR_ABS="$(pwd)/${RUN_DIR_REL}"
+mkdir -p "${RUN_DIR_ABS}"
+
+# RL case は学習データを online 生成するので DVC から pull するのは resume 用の
+# run dir だけ。同じ run_id の .dvc が origin にあれば (再起動時) pull し、
+# train.py は checkpoint_latest.* から自動 resume する。無ければ pull しない。
+# .dvc/config に profile 指定が無いので、env (AWS_ACCESS_KEY_ID/SECRET) を
+# boto3 default credential chain がそのまま拾う。
+if [ -f "${RUN_DIR_REL}.dvc" ]; then
+  echo "[onstart] step=dvc_pull (resume) ${RUN_DIR_REL}.dvc"
+  backend/.venv/bin/python -m dvc pull "${RUN_DIR_REL}.dvc"
+else
+  echo "[onstart] step=dvc_pull_skip (fresh run)"
+fi
+
+if [ -n "<PREPROCESS_CMD>" ]; then
+  echo "[onstart] step=preprocess case=<CASE>"
+  (cd backend && .venv/bin/python -m <PREPROCESS_CMD>)
+fi
+
+echo "[onstart] step=train_direct case=<CASE> module=<TRAIN_MODULE> args=<CONFIG_ARG>"
+# dvc.yaml は使わず train module を直接実行する (RunPod onstart と同じ契約)。
+BEST_S3_PREFIX=""
+if [ -n "${REINFORCE_DVC_BUCKET:-}" ]; then
+  BEST_S3_PREFIX="s3://${REINFORCE_DVC_BUCKET}/remote/vast_artifacts/<RUN_ID>"
+fi
+REINFORCE_RUN_DIR="${RUN_DIR_ABS}" \
+  REINFORCE_RUN_ID="<RUN_ID>" \
+  REINFORCE_GIT_SHA="<COMMIT_SHA>" \
+  REINFORCE_GIT_BRANCH="<BRANCH>" \
+  REINFORCE_VAST_INSTANCE_ID="${INSTANCE_ID}" \
+  REINFORCE_BEST_S3_PREFIX="${BEST_S3_PREFIX}" \
+  REINFORCE_COMMAND="cd backend && .venv/bin/python -m <TRAIN_MODULE> <CONFIG_ARG>" \
+  bash -c "cd backend && .venv/bin/python -m <TRAIN_MODULE> <CONFIG_ARG>"
+
+echo "[onstart] step=dvc_add_run"
+backend/.venv/bin/python -m dvc add "${RUN_DIR_REL}"
+
+echo "[onstart] step=dvc_push_runs"
+backend/.venv/bin/python -m dvc push "${RUN_DIR_REL}.dvc"
+
+# Push the generated <RUN_ID>.dvc back to origin so dev/vast pull can resolve
+# the run via `dvc pull <path>` locally. Failure here must not fail the run —
+# the artifacts are already in S3 and the .dvc can be reconstructed by hand.
+echo "[onstart] step=git_push_dvc_meta"
+RUN_DVC_FILE="${RUN_DIR_REL}.dvc"
+if [ -f "${RUN_DVC_FILE}" ]; then
+  git config user.email "vast-bot@reinforce.local"
+  git config user.name "vast-bot"
+  TARGET_BRANCH="<BRANCH>"
+  git fetch origin "${TARGET_BRANCH}" || true
+  # Detach -> branch with rebased history so we don't drag training-time HEAD
+  # state. We only commit the .dvc file; nothing else is staged.
+  git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}" || git checkout "${TARGET_BRANCH}" || true
+  git add -f -- "${RUN_DVC_FILE}"
+  git commit --no-verify -m ":robot: vast: add <CASE>/runs/<RUN_ID>.dvc" || {
+    echo "[onstart] git_push_dvc_meta: nothing to commit (already tracked?)"
+  }
+  for attempt in 1 2 3; do
+    if git push origin "HEAD:${TARGET_BRANCH}"; then
+      echo "[onstart] git_push_dvc_meta: pushed to ${TARGET_BRANCH}"
+      break
+    fi
+    echo "[onstart] git_push_dvc_meta: attempt=${attempt} rejected; rebasing"
+    git pull --rebase origin "${TARGET_BRANCH}" || true
+    if [ "${attempt}" -eq 3 ]; then
+      echo "[onstart] git_push_dvc_meta: exhausted retries; .dvc stays in S3 only"
+    fi
+  done
+else
+  echo "[onstart] git_push_dvc_meta: ${RUN_DVC_FILE} not found (dvc add failed?)"
+fi
+
+echo "[onstart] step=done run_id=<RUN_ID>"

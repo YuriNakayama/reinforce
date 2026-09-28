@@ -1,0 +1,21 @@
+#!/bin/bash
+# Install Python dependencies.
+#
+# Usage:
+#   dev/setup            # runtime (JAX CPU) + dev deps
+#   dev/setup --nn       # + torch
+#   dev/setup --gpu      # + RunPod / Vast.ai / Kaggle SDKs (pod control)
+#   dev/setup --cuda     # + JAX CUDA 12 plugin (Linux pods only)
+#   dev/setup --all      # everything above
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+echo "== backend: installing dependencies =="
+case "${1:-}" in
+  --nn)   (cd backend && uv sync --group nn) ;;
+  --gpu)  (cd backend && uv sync --group gpu) ;;
+  --cuda) (cd backend && uv sync --group cuda) ;;
+  --all)  (cd backend && uv sync --group nn --group gpu --group cuda) ;;
+  *)      (cd backend && uv sync) ;;
+esac
+echo "== done =="
